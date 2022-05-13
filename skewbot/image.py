@@ -23,6 +23,8 @@ MAX_SHEAR = 0.5  # angle in radians
 
 CONCURRENCY = int(os.getenv("CONCURRENCY", "1"))
 
+pallete_name_counter = 0
+
 @semaphore(CONCURRENCY)
 async def skew_image(source_im: BytesIO | str) -> BytesIO:
 
@@ -49,91 +51,99 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
 
     # first create a palette
     # We create a palette based on only the original image, as the other frames will not contain any other colors.
-    pal_proc = await aio.create_subprocess_exec(
-        *shlex.split(
-            "ffmpeg -y -loglevel warning -hide_banner -f image2pipe"
-            f" -i {source_im if isinstance(source_im, str) else '-'}"
-            " -vf palettegen=reserve_transparent=1 palette.png"),
-        stdin=PIPE,
-    )
+    global pallete_name_counter
+    pal_name = f"palette_{pallete_name_counter}.png"
+    pallete_name_counter += 1
+
     try:
-        if isinstance(source_im, str):
-            await pal_proc.communicate()
-        else:
-            await pal_proc.communicate(source_im.getbuffer())
-        if pal_proc.returncode:
-            raise
-    except BaseException:
+        pal_proc = await aio.create_subprocess_exec(
+            *shlex.split(
+                "ffmpeg -y -loglevel warning -hide_banner -f image2pipe"
+                f" -i {source_im if isinstance(source_im, str) else '-'}"
+                f" -vf palettegen=reserve_transparent=1 {pal_name}"),
+            stdin=PIPE,
+        )
         try:
-            pal_proc.kill()
-        except:
-            pass
-        else:
-            logger.warning("Killing palette process.")
-        raise Exception()
+            if isinstance(source_im, str):
+                await pal_proc.communicate()
+            else:
+                await pal_proc.communicate(source_im.getbuffer())
+            if pal_proc.returncode:
+                raise
+        except BaseException:
+            try:
+                pal_proc.kill()
+            except:
+                pass
+            else:
+                logger.warning("Killing palette process.")
+            raise Exception()
 
-    ffmpeg_args_list = [
-        "ffmpeg",
-        "-y",
-        "-loglevel", "warning",
-        "-hide_banner",
-        "-thread_queue_size", "32",
-        "-f", "rawvideo",
-        "-pix_fmt", "rgba",
-        "-s", f"{expanded_im.size[0]}x{expanded_im.size[1]}",
-        "-r", str(FRAME_RATE),
-        "-i", "-",
-        "-i", "palette.png",
-        "-filter_complex",
-        f"fps={FRAME_RATE},paletteuse=alpha_threshold=128,setpts='if(eq(N,{TOTAL_FRAMES}), PTS+{FRAME_RATE*4}, 1*PTS)'",
-        "-gifflags", "-offsetting",
-        "-f", "gif",
-        "-",
-    ]
-    logger.debug(shlex.join(ffmpeg_args_list))
+        ffmpeg_args_list = [
+            "ffmpeg",
+            "-y",
+            "-loglevel", "warning",
+            "-hide_banner",
+            "-thread_queue_size", "32",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "-s", f"{expanded_im.size[0]}x{expanded_im.size[1]}",
+            "-r", str(FRAME_RATE),
+            "-i", "-",
+            "-i", pal_name,
+            "-filter_complex",
+            f"fps={FRAME_RATE},paletteuse=alpha_threshold=128,setpts='if(eq(N,{TOTAL_FRAMES}), PTS+{FRAME_RATE*4}, 1*PTS)'",
+            "-gifflags", "-offsetting",
+            "-f", "gif",
+            "-",
+        ]
+        logger.debug(shlex.join(ffmpeg_args_list))
 
-    proc = await aio.create_subprocess_exec(*ffmpeg_args_list, stdin=PIPE, stdout=PIPE)
+        proc = await aio.create_subprocess_exec(*ffmpeg_args_list, stdin=PIPE, stdout=PIPE)
 
-    try:
-        # Read simultaneously to prevent buffers from clogging up.
-        read_from_proc = aio.create_task(proc.stdout.read())  # type: ignore
+        try:
+            # Read simultaneously to prevent buffers from clogging up.
+            read_from_proc = aio.create_task(proc.stdout.read())  # type: ignore
 
-        for t in range(TOTAL_FRAMES):
+            for t in range(TOTAL_FRAMES):
 
-            shear = a*t**2
+                shear = a*t**2
 
-            skewed = _skew_image(source, shear)
+                skewed = _skew_image(source, shear)
 
-            await proc.stdin.drain()  # type: ignore
+                await proc.stdin.drain()  # type: ignore
+                proc.stdin.write(skewed.tobytes())  # type: ignore
+
+            # Write the last frame again to fix the last frame timestamp.
             proc.stdin.write(skewed.tobytes())  # type: ignore
+            await proc.stdin.drain()  # type: ignore
 
-        # Write the last frame again to fix the last frame timestamp.
-        proc.stdin.write(skewed.tobytes())  # type: ignore
-        await proc.stdin.drain()  # type: ignore
+            proc.stdin.write_eof()  # type: ignore
+            await proc.stdin.drain()  # type: ignore
+            gif = await read_from_proc
+            await proc.wait()
 
-        proc.stdin.write_eof()  # type: ignore
-        await proc.stdin.drain()  # type: ignore
-        gif = await read_from_proc
-        await proc.wait()
+        except BaseException:
+            try:
+                proc.kill()
+            except:
+                pass
+            else:
+                logger.warning("Killing gif process.")
+            raise
 
-    except BaseException:
+        result = BytesIO(gif)
+
+        end_time = time.perf_counter()
+        logger.info(f"skew_image took {end_time-start_time :4.3f} s, size {len(gif)/10**6 :4.3f} MB.")
+
+        return result
+    finally:
         try:
-            proc.kill()
-        except:
+            os.remove(pal_name)
+        except FileNotFoundError:
             pass
-        else:
-            logger.warning("Killing gif process.")
-        raise
 
-    result = BytesIO(gif)
-
-    end_time = time.perf_counter()
-    logger.info(f"skew_image took {end_time-start_time :4.3f} s, size {len(gif)/10**6 :4.3f} MB.")
-
-    return result
-
-# X = np.arange(MAX_HEIGHT, dtype=np.intp)[:, np.newaxis]
-# Y = np.arange(MAX_WIDTH + int(MAX_HEIGHT * np.tan(MAX_SHEAR)), dtype=np.intp)[np.newaxis, :]
 
 def _skew_image(img_arr: np.ndarray, x_angle: float) -> np.ndarray:
     x, y = np.ogrid[:img_arr.shape[0], :img_arr.shape[1]]
