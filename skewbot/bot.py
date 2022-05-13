@@ -10,9 +10,9 @@ import dotenv
 from discord import app_commands as ac
 from discord.interactions import Interaction
 
-from .image import CONCURRENCY
+from .image import CONCURRENCY, skew_image
 from .image import logger as image_logger
-from .image import skew_image
+from .utils import RateLimit
 
 
 dotenv.load_dotenv()
@@ -67,6 +67,8 @@ def func_count(f):
     return wrapped
 
 
+skew_rl = RateLimit(30, 300)
+
 @tree.command(name="skew")
 @ac.describe(
     image="You can use ctrl+v | If omitted, last image.",
@@ -74,6 +76,9 @@ def func_count(f):
 @func_count
 async def skew(it: Interaction, image: dc.Attachment):
     "Picture, but in *italics*."
+
+    if not skew_rl.add(it.user.id):
+        return
 
     if not (
         image.content_type and image.content_type.startswith("img")
