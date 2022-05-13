@@ -35,7 +35,6 @@ image_logger.addHandler(handler)
 
 intents = dc.Intents()
 intents.guilds = True
-intents.message_content = True
 
 client = dc.Client(intents=intents, application_id=app_id)
 tree = ac.CommandTree(client)
@@ -70,42 +69,9 @@ def func_count(f):
     image="You can use ctrl+v | If omitted, last image.",
 )
 @func_count
-async def skew(it: Interaction, image: Optional[dc.Attachment]):
+async def skew(it: Interaction, image: dc.Attachment):
     "Picture, but in *italics*."
 
-    if not image:
-        chn = it.channel
-
-        target_att = None
-        # Permision: read_message_history
-        try:
-            async for msg in chn.history(limit=20):  # type: ignore
-                br = False
-                for att in reversed(msg.attachments):
-                    if (
-                        att.content_type and att.content_type.startswith("img")
-                        or att.filename.split(".")[-1] in ("png", "jpg", "bmp")
-                    ) and msg.author == it.client.user:
-                        target_att = att
-                    br = True
-                    break
-                if br:
-                    break
-        except dc.Forbidden:
-            await it.response.send_message(
-                "You didn't give a an image, so I tried looking at the chat history to find one."
-                " But I don't have the permissions to do that 😣",
-                ephemeral=True,
-            )
-            return
-        
-        if target_att:
-            image = target_att
-        else:
-            await it.response.send_message("No image 🤨", ephemeral=True)
-            return
-    
-    
     if not (
         image.content_type and image.content_type.startswith("img")
         or image.filename.split(".")[-1] in ("png", "jpg", "bmp")
