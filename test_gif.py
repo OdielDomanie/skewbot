@@ -1,7 +1,8 @@
 import asyncio as aio
-from io import BytesIO
 import logging
-from skewbot.image import skew_image, logger
+from io import BytesIO
+
+from skewbot.image import logger, skew_image
 
 
 logger.setLevel(logging.DEBUG)
@@ -16,5 +17,5 @@ async def _test():
     with open("test.gif", "wb") as gif_file:
         gif_file.write(gif.getbuffer())
 
-if __name__ == "__main__":    
+if __name__ == "__main__":
     aio.run(_test())

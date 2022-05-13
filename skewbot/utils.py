@@ -16,6 +16,6 @@ def semaphore(value: int):
 
             async with sem:
                 return await f(*args, **kwargs)
-        
+
         return wrapped  # type: ignore  # The typing works regardless.
     return decorator

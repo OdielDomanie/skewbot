@@ -1,15 +1,18 @@
 import asyncio as aio
 import functools
-from io import BytesIO
 import logging
 import os
-from typing import Optional, Union
+from io import BytesIO
+from typing import Union
+
 import discord as dc
+import dotenv
 from discord import app_commands as ac
 from discord.interactions import Interaction
-import dotenv
-from .image import skew_image, CONCURRENCY
+
+from .image import CONCURRENCY
 from .image import logger as image_logger
+from .image import skew_image
 
 
 dotenv.load_dotenv()
@@ -61,7 +64,7 @@ def func_count(f):
             return await f(*args, **kwargs)
         finally:
             skew_count -= 1
-    return wrapped          
+    return wrapped
 
 
 @tree.command(name="skew")
@@ -78,9 +81,9 @@ async def skew(it: Interaction, image: dc.Attachment):
     ):
         await it.response.send_message("Not a picture 😬", ephemeral=True)
         return
-    
+
     defer_task = aio.create_task(it.response.defer(thinking=True))
-    
+
     att_data = await image.read()
 
     TIMEOUT = 15

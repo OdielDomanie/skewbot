@@ -1,7 +1,10 @@
 import os
 import sys
+
 import dotenv
-from .bot import client, tree, test_guild
+
+from .bot import client, tree
+
 
 dotenv.load_dotenv()
 

@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import asyncio as aio
-from asyncio.subprocess import PIPE
-from io import BytesIO
 import logging
 import os
 import shlex
 import time
-from PIL import Image
+from asyncio.subprocess import PIPE
+from io import BytesIO
+
 import numpy as np
+from PIL import Image
+
 from .utils import semaphore
 
 
@@ -24,7 +27,7 @@ CONCURRENCY = int(os.getenv("CONCURRENCY", "1"))
 async def skew_image(source_im: BytesIO | str) -> BytesIO:
 
     start_time = time.perf_counter()
-    
+
     TOTAL_FRAMES = 70
     FRAME_RATE = 50
 
@@ -100,10 +103,10 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
             shear = a*t**2
 
             skewed = _skew_image(source, shear)
-            
+
             await proc.stdin.drain()  # type: ignore
             proc.stdin.write(skewed.tobytes())  # type: ignore
-        
+
         # Write the last frame again to fix the last frame timestamp.
         proc.stdin.write(skewed.tobytes())  # type: ignore
         await proc.stdin.drain()  # type: ignore
