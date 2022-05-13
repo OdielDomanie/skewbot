@@ -3,20 +3,24 @@ import asyncio as aio
 from asyncio.subprocess import PIPE
 from io import BytesIO
 import logging
+import os
 import shlex
 import time
 from PIL import Image
 import numpy as np
+from .utils import semaphore
 
 
 logger = logging.getLogger("image")
 
 
-MAX_WIDTH = 512
+MAX_WIDTH = 480
 MAX_HEIGHT = 480
-MAX_SHEAR = 0.5
+MAX_SHEAR = 0.5  # angle in radians
 
+CONCURRENCY = int(os.getenv("CONCURRENCY", "1"))
 
+@semaphore(CONCURRENCY)
 async def skew_image(source_im: BytesIO | str) -> BytesIO:
 
     start_time = time.perf_counter()
@@ -33,9 +37,6 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
     )
     expanded_im.paste(source_pil, (0, 0, source_pil.size[0], source_pil.size[1]))
 
-    # if source_pil.mode == "RGB":
-    #     a_channel = Image.new('L', source_pil.size, 255)   # 'L' 8-bit pixels, black and white
-    #     source_pil.putalpha(a_channel)
     source = np.array(expanded_im)
 
     # shear = a*t**2
@@ -44,6 +45,7 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
     frames = []
 
     # first create a palette
+    # We create a palette based on only the original image, as the other frames will not contain any other colors.
     pal_proc = await aio.create_subprocess_exec(
         *shlex.split(
             "ffmpeg -y -loglevel warning -hide_banner -f image2pipe"
@@ -56,6 +58,8 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
             await pal_proc.communicate()
         else:
             await pal_proc.communicate(source_im.getbuffer())
+        if pal_proc.returncode:
+            raise
     except BaseException:
         try:
             pal_proc.kill()
@@ -63,17 +67,29 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
             pass
         else:
             logger.warning("Killing palette process.")
-        raise
+        raise Exception()
 
-    ffmpeg_args = (
-        "ffmpeg -y -loglevel warning -hide_banner -thread_queue_size 32 -f rawvideo"
-        f" -pix_fmt rgba -s {expanded_im.size[0]}x{expanded_im.size[1]} -r {FRAME_RATE}"
-        " -i - -i palette.png -filter_complex"
-        # fR' "scale=if(gte(iw\,ih)\,min({MAX_WIDTH}\,iw)\,-2):if(lt(iw\,ih)\,min({MAX_HEIGHT}\,ih)\,-2),paletteuse=alpha_threshold=128"'
-        ' "paletteuse=alpha_threshold=128"'
-        " -gifflags -offsetting -f gif -"
-    )
-    proc = await aio.create_subprocess_exec(*shlex.split(ffmpeg_args), stdin=PIPE, stdout=PIPE)  #, stdout=DEVNULL, stderr=DEVNULL)
+    ffmpeg_args_list = [
+        "ffmpeg",
+        "-y",
+        "-loglevel", "warning",
+        "-hide_banner",
+        "-thread_queue_size", "32",
+        "-f", "rawvideo",
+        "-pix_fmt", "rgba",
+        "-s", f"{expanded_im.size[0]}x{expanded_im.size[1]}",
+        "-r", str(FRAME_RATE),
+        "-i", "-",
+        "-i", "palette.png",
+        "-filter_complex",
+        f"fps={FRAME_RATE},paletteuse=alpha_threshold=128,setpts='if(eq(N,{TOTAL_FRAMES}), PTS+{FRAME_RATE*4}, 1*PTS)'",
+        "-gifflags", "-offsetting",
+        "-f", "gif",
+        "-",
+    ]
+    logger.debug(shlex.join(ffmpeg_args_list))
+
+    proc = await aio.create_subprocess_exec(*ffmpeg_args_list, stdin=PIPE, stdout=PIPE)
 
     try:
         # Read simultaneously to prevent buffers from clogging up.
@@ -82,18 +98,15 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
         for t in range(TOTAL_FRAMES):
 
             shear = a*t**2
-            # skew_tf = tf.AffineTransform(translation=(shear * -source_pil.size[1], 0), shear=-shear)
-            # , scale=(1, 1*(1+shear))
 
-            # frame = tf.warp(source, inverse_map=skew_tf)
-            # frames.append(frame)
             skewed = _skew_image(source, shear)
-
             
             await proc.stdin.drain()  # type: ignore
             proc.stdin.write(skewed.tobytes())  # type: ignore
-
-            # io.imsave(f"test{t}.tiff", skewed)
+        
+        # Write the last frame again to fix the last frame timestamp.
+        proc.stdin.write(skewed.tobytes())  # type: ignore
+        await proc.stdin.drain()  # type: ignore
 
         proc.stdin.write_eof()  # type: ignore
         await proc.stdin.drain()  # type: ignore
@@ -120,28 +133,8 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
 # Y = np.arange(MAX_WIDTH + int(MAX_HEIGHT * np.tan(MAX_SHEAR)), dtype=np.intp)[np.newaxis, :]
 
 def _skew_image(img_arr: np.ndarray, x_angle: float) -> np.ndarray:
-    # x = np.arange(img_arr.shape[0], dtype=np.intp).reshape((img_arr.shape[0],1))
-    # y = np.arange(img_arr.shape[1], dtype=np.intp).reshape((1, img_arr.shape[1]))
     x, y = np.ogrid[:img_arr.shape[0], :img_arr.shape[1]]
-    # x = X[:img_arr.shape[0], :]
-    # y = Y[:, :img_arr.shape[1]]
 
     y_tf = y - (np.tan(x_angle) * (img_arr.shape[0]-x)).astype(np.intp, copy=False)
 
     return img_arr[x, y_tf]
-
-
-async def _test():
-    im_name = "test.jpg"
-    with open(im_name, "rb") as im_file:
-        im = im_file.read()   
-    await skew_image(BytesIO(im))
-
-if __name__ == "__main__":
-    # logger.addHandler(logging.StreamHandler())
-    # logger.setLevel(logging.INFO)
-    
-    import cProfile
-    cProfile.run(
-        "aio.run(_test())"
-    )
