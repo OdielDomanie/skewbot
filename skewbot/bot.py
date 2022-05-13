@@ -39,7 +39,12 @@ image_logger.addHandler(handler)
 intents = dc.Intents()
 intents.guilds = True
 
-client = dc.Client(intents=intents, application_id=app_id)
+status = dc.Activity(
+    name="/skew",
+    type=dc.ActivityType.listening,
+)
+
+client = dc.Client(intents=intents, application_id=app_id, activity=status)
 tree = ac.CommandTree(client)
 
 
@@ -71,7 +76,7 @@ skew_rl = RateLimit(30, 300)
 
 @tree.command(name="skew")
 @ac.describe(
-    image="You can use ctrl+v | If omitted, last image.",
+    image="You can use ctrl+v",
 )
 @func_count
 async def skew(it: Interaction, image: dc.Attachment):
