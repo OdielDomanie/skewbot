@@ -90,7 +90,7 @@ async def skew(it: Interaction, image: dc.Attachment):
 )
 @func_count
 async def wide(it: Interaction, image: dc.Attachment, width: Optional[float]=2.0):
-    return await _skew(it, image, mode="wide", param=wide)
+    return await _skew(it, image, mode="wide", param=width)
 
 
 async def _skew(it: Interaction, image: dc.Attachment, **kwargs):
