@@ -152,6 +152,10 @@ async def skew_image(
                     wide = a*t**2 + 1
                     skewed = _wide_image(source, wide)
 
+                    # For some reason, if we don't do this, the gif will have its last frame corrupted in some cases.
+                    if t == TOTAL_FRAMES - 1:
+                        skewed[5,5] = (1,1,1,1)   # type: ignore
+
                 await proc.stdin.drain()  # type: ignore
                 proc.stdin.write(skewed.tobytes())  # type: ignore
 
