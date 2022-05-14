@@ -3,7 +3,7 @@ import functools
 import logging
 import os
 from io import BytesIO
-from typing import Union
+from typing import Literal, Optional, Union
 
 import discord as dc
 import dotenv
@@ -80,6 +80,20 @@ skew_rl = RateLimit(30, 300)
 )
 @func_count
 async def skew(it: Interaction, image: dc.Attachment):
+    return await _skew(it, image)
+
+
+@tree.command(name="wide")
+@ac.describe(
+    image="You can use ctrl+v",
+    width="How wide?",
+)
+@func_count
+async def wide(it: Interaction, image: dc.Attachment, width: Optional[float]=2.0):
+    return await _skew(it, image, mode="wide", param=wide)
+
+
+async def _skew(it: Interaction, image: dc.Attachment, **kwargs):
     "Picture, but in *italics*."
 
     if not skew_rl.add(it.user.id):
@@ -99,7 +113,7 @@ async def skew(it: Interaction, image: dc.Attachment):
     TIMEOUT = 15
     timeout = TIMEOUT * max(1, (skew_count - CONCURRENCY))
     try:
-        out: BytesIO = await aio.wait_for(skew_image(BytesIO(att_data)), timeout)
+        out: BytesIO = await aio.wait_for(skew_image(BytesIO(att_data), **kwargs), timeout)
     except aio.TimeoutError:
         await defer_task
         await it.delete_original_message()
