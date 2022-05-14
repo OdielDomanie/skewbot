@@ -17,5 +17,9 @@ async def _test():
     with open("test.gif", "wb") as gif_file:
         gif_file.write(gif.getbuffer())
 
+    gif = await skew_image(BytesIO(im), mode="wide", param=5)
+    with open("test_wide.gif", "wb") as gif_file:
+        gif_file.write(gif.getbuffer())
+
 if __name__ == "__main__":
     aio.run(_test())
