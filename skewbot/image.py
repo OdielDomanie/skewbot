@@ -134,6 +134,7 @@ async def skew_image(
             "-f", "gif",
             "-",
         ]
+
         logger.debug(shlex.join(ffmpeg_args_list))
 
         proc = await aio.create_subprocess_exec(*ffmpeg_args_list, stdin=PIPE, stdout=PIPE)
@@ -204,9 +205,6 @@ def _wide_image(img_arr: np.ndarray, x_ratio: float) -> np.ndarray:
     center_x = img_arr.shape[1] // 2
 
     # y_tf = (y - center) / scale + center
-    y_tf = ((y - center_x) / x_ratio + center_x).astype(np.intp, copy=False)
-    # y_tf = ((y - int(center_x * (-1+x_ratio))) // x_ratio).astype(np.intp, copy=False)
-
-    # y_tf = y - (np.tan(x_angle) * (img_arr.shape[0]-x)).astype(np.intp, copy=False)
+    y_tf = ((y - int(center_x * (1-x_ratio))) / x_ratio).astype(np.intp, copy=False)
 
     return img_arr[x, y_tf]
