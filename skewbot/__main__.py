@@ -5,6 +5,8 @@ import dotenv
 
 from .bot import client, tree
 
+from . import signal_handler
+
 
 dotenv.load_dotenv()
 
