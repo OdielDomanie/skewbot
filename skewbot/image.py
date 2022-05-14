@@ -7,6 +7,7 @@ import shlex
 import time
 from asyncio.subprocess import PIPE
 from io import BytesIO
+from typing import Literal, Optional
 
 import numpy as np
 from PIL import Image
@@ -20,13 +21,17 @@ logger = logging.getLogger("image")
 MAX_WIDTH = 480
 MAX_HEIGHT = 480
 MAX_SHEAR = 0.5  # angle in radians
+MAX_WIDE = 2
+MAX_OUTPUT_PIXELS = 480 * 480 * np.tan(MAX_SHEAR)
 
 CONCURRENCY = int(os.getenv("CONCURRENCY", "1"))
 
 pallete_name_counter = 0
 
 @semaphore(CONCURRENCY)
-async def skew_image(source_im: BytesIO | str) -> BytesIO:
+async def skew_image(
+        source_im: BytesIO | str, param: Optional[float] = None, mode: Literal["skew", "wide"] = "skew"
+    ) -> BytesIO:
 
     start_time = time.perf_counter()
 
@@ -36,16 +41,48 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
     source_pil = Image.open(source_im)
     source_pil.thumbnail((MAX_WIDTH, MAX_HEIGHT), resample=Image.NEAREST)
 
+
+    if mode == "skew":
+        if not param or param <= 0 or param >= np.pi / 2 - 0.1:
+            param = MAX_SHEAR
+        expanded_size = (int(source_pil.size[0] + source_pil.size[1] * np.tan(param)), source_pil.size[1])
+
+
+    elif mode == "wide":
+        if not param or param < 1 or param > 20:
+            param = MAX_WIDE
+        expanded_size = (int(source_pil.size[0] * param), source_pil.size[1])
+
+    else:
+        raise ValueError()
+
+    # Reduce the size if the params are too huge
+    out_pixels = expanded_size[0] * expanded_size[1]
+    if out_pixels > MAX_OUTPUT_PIXELS:
+        reduce_factor = np.sqrt(MAX_OUTPUT_PIXELS / out_pixels)
+        expanded_size = int(expanded_size[0] * reduce_factor), int(expanded_size[1] * reduce_factor)
+
+    # We are doing two reductions instead of calculating the size beforehand.
+    # This is inefficient but I'm lazy and it shouldn't matter much.
+    source_pil.thumbnail((MAX_WIDTH, expanded_size[1]), resample=Image.NEAREST)
+
     expanded_im = Image.new(
         "RGBA",
-        size=(int(source_pil.size[0] + source_pil.size[1] * np.tan(MAX_SHEAR)), source_pil.size[1]), color=(0,0,0,0)
+        size=expanded_size, color=(0,0,0,0)
     )
-    expanded_im.paste(source_pil, (0, 0, source_pil.size[0], source_pil.size[1]))
+    if mode == "skew":
+        expanded_im.paste(source_pil, (0, 0, source_pil.size[0], source_pil.size[1]))
+    else:
+        expanded_im.paste(source_pil, ((expanded_size[0] - source_pil.size[0]) // 2, 0))
 
     source = np.array(expanded_im)
 
-    # shear = a*t**2
-    a = MAX_SHEAR / (TOTAL_FRAMES-1) ** 2
+    if mode == "skew":
+        # shear = a*t**2
+        a = param / (TOTAL_FRAMES-1) ** 2
+    else:
+        # wide = a*t**2 + 1
+        a = (param-1) / (TOTAL_FRAMES-1) ** 2
 
     frames = []
 
@@ -107,9 +144,13 @@ async def skew_image(source_im: BytesIO | str) -> BytesIO:
 
             for t in range(TOTAL_FRAMES):
 
-                shear = a*t**2
 
-                skewed = _skew_image(source, shear)
+                if mode == "skew":
+                    shear = a*t**2
+                    skewed = _skew_image(source, shear)
+                else:
+                    wide = a*t**2 + 1
+                    skewed = _wide_image(source, wide)
 
                 await proc.stdin.drain()  # type: ignore
                 proc.stdin.write(skewed.tobytes())  # type: ignore
@@ -149,5 +190,19 @@ def _skew_image(img_arr: np.ndarray, x_angle: float) -> np.ndarray:
     x, y = np.ogrid[:img_arr.shape[0], :img_arr.shape[1]]
 
     y_tf = y - (np.tan(x_angle) * (img_arr.shape[0]-x)).astype(np.intp, copy=False)
+
+    return img_arr[x, y_tf]
+
+
+def _wide_image(img_arr: np.ndarray, x_ratio: float) -> np.ndarray:
+    x, y = np.ogrid[:img_arr.shape[0], :img_arr.shape[1]]
+
+    center_x = img_arr.shape[1] // 2
+
+    # y_tf = (y - center) / scale + center
+    y_tf = ((y - center_x) / x_ratio + center_x).astype(np.intp, copy=False)
+    # y_tf = ((y - int(center_x * (-1+x_ratio))) // x_ratio).astype(np.intp, copy=False)
+
+    # y_tf = y - (np.tan(x_angle) * (img_arr.shape[0]-x)).astype(np.intp, copy=False)
 
     return img_arr[x, y_tf]
